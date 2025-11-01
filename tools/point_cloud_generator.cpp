@@ -12,7 +12,7 @@
 
 #include "PointCloudData.h"
 
-// Octree node for spatial organization
+// Octree node for spatial organizationx
 struct OctreeNode {
     BoundingBox bbox;
     std::vector<Point> points;

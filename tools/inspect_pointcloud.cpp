@@ -23,7 +23,7 @@ void printHeader(const FileHeader& header) {
     float cx, cy, cz;
     header.bounds.getCenter(cx, cy, cz);
     std::cout << "  Center: (" << cx << ", " << cy << ", " << cz << ")" << std::endl;
-    std::cout << "  Size: " << header.bounds.size() << std::endl;
+//    std::cout << "  Size: " << header.bounds.size() << std::endl;
 }
 
 void printChunkStats(const std::vector<ChunkMetadata>& chunks) {
@@ -37,29 +37,29 @@ void printChunkStats(const std::vector<ChunkMetadata>& chunks) {
     uint32_t min_points = chunks[0].point_count;
     uint32_t max_points = chunks[0].point_count;
     uint64_t total_points = 0;
-    float min_size = chunks[0].bbox.size();
-    float max_size = chunks[0].bbox.size();
+//    float min_size = chunks[0].bbox.size();
+//    float max_size = chunks[0].bbox.size();
+//
+//    for (const auto& chunk : chunks) {
+//        min_points = std::min(min_points, chunk.point_count);
+//        max_points = std::max(max_points, chunk.point_count);
+//        total_points += chunk.point_count;
+//
+////        float size = chunk.bbox.size();
+//        min_size = std::min(min_size, size);
+//        max_size = std::max(max_size, size);
+//    }
     
-    for (const auto& chunk : chunks) {
-        min_points = std::min(min_points, chunk.point_count);
-        max_points = std::max(max_points, chunk.point_count);
-        total_points += chunk.point_count;
-        
-        float size = chunk.bbox.size();
-        min_size = std::min(min_size, size);
-        max_size = std::max(max_size, size);
-    }
-    
-    std::cout << "Total Chunks: " << chunks.size() << std::endl;
-    std::cout << "Points per Chunk:" << std::endl;
-    std::cout << "  Min: " << min_points << std::endl;
-    std::cout << "  Max: " << max_points << std::endl;
-    std::cout << "  Avg: " << (total_points / chunks.size()) << std::endl;
-    
-    std::cout << "Chunk Size (spatial):" << std::endl;
-    std::cout << "  Min: " << min_size << std::endl;
-    std::cout << "  Max: " << max_size << std::endl;
-    std::cout << "  Avg: " << ((min_size + max_size) / 2.0f) << std::endl;
+//    std::cout << "Total Chunks: " << chunks.size() << std::endl;
+//    std::cout << "Points per Chunk:" << std::endl;
+//    std::cout << "  Min: " << min_points << std::endl;
+//    std::cout << "  Max: " << max_points << std::endl;
+//    std::cout << "  Avg: " << (total_points / chunks.size()) << std::endl;
+//
+//    std::cout << "Chunk Size (spatial):" << std::endl;
+//    std::cout << "  Min: " << min_size << std::endl;
+//    std::cout << "  Max: " << max_size << std::endl;
+//    std::cout << "  Avg: " << ((min_size + max_size) / 2.0f) << std::endl;
 }
 
 void printDetailedChunks(const std::vector<ChunkMetadata>& chunks, int max_display = 10) {

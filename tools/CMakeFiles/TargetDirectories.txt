@@ -1,0 +1,4 @@
+/home/bhalla/AndroidStudioProjects/rendering-challenge/tools/CMakeFiles/point_cloud_generator.dir
+/home/bhalla/AndroidStudioProjects/rendering-challenge/tools/CMakeFiles/inspect_pointcloud.dir
+/home/bhalla/AndroidStudioProjects/rendering-challenge/tools/CMakeFiles/edit_cache.dir
+/home/bhalla/AndroidStudioProjects/rendering-challenge/tools/CMakeFiles/rebuild_cache.dir
