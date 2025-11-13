@@ -11,6 +11,8 @@ add_library(renderingchallenge SHARED
         main.cpp
         AndroidOut.cpp
         Renderer.cpp
+        PointCloudFile.cpp
+        Gizmo.cpp
 )
 
 # Searches for a package provided by the game activity dependency

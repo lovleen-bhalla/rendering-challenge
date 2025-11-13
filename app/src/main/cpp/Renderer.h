@@ -6,6 +6,9 @@
 
 #include "Model.h"
 #include "Shader.h"
+#include "PointCloudFile.h"
+#include "Gizmo.h"
+#include "glm/glm.hpp"
 
 struct android_app;
 
@@ -63,11 +66,30 @@ private:
     EGLint height_;
 
     bool shaderNeedsNewProjectionMatrix_;
-    
+
     // Example: Simple triangle rendering
     GLuint shader_program_;
     GLuint vao_;
     GLuint vbo_;
+
+    PointCloudFile *pcf;
+    Gizmo *gizmo;
+    glm::mat4 model;
+    float yaw;
+    float pitch;
+
+    glm::vec3 camUp;
+    glm::vec3 camPos;
+    glm::vec3 camTarget;
+    glm::vec3 direction;
+    glm::mat4 view;
+    glm::mat4 proj;
+    glm::mat4 mvp;
+
+    bool firstTouch = true;
+    float lastX = 0.0f;
+    float lastY = 0.0f;
+    bool updateView = false;
 };
 
 #endif //ANDROIDGLINVESTIGATIONS_RENDERER_H

@@ -11,6 +11,12 @@
 #include "glm/glm.hpp"
 #include "glm/ext/matrix_clip_space.hpp"
 
+#include "PointCloudFile.h"
+#include "glm/ext/matrix_transform.hpp"
+#include "Gizmo.h"
+#include "ShaderSource.h"
+#include <chrono>
+
 //! executes glGetString and outputs the result to logcat
 #define PRINT_GL_STRING(s) {aout << #s": "<< glGetString(s) << std::endl;}
 
@@ -33,6 +39,8 @@ for (auto& extension: extensionList) {\
 aout << std::endl;\
 }
 
+static int frameCount = 0;
+static auto lastTime = std::chrono::high_resolution_clock::now();
 
 // Vertex shader for colored triangle
 static const char *vertex = R"vertex(#version 300 es
@@ -83,7 +91,7 @@ static constexpr float kProjectionFarPlane = 1.f;
 Renderer::~Renderer() {
     if (display_ != EGL_NO_DISPLAY) {
         eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        
+
         // Clean up OpenGL resources
         if (vbo_) {
             glDeleteBuffers(1, &vbo_);
@@ -94,7 +102,7 @@ Renderer::~Renderer() {
         if (shader_program_) {
             glDeleteProgram(shader_program_);
         }
-        
+
         if (context_ != EGL_NO_CONTEXT) {
             eglDestroyContext(display_, context_);
             context_ = EGL_NO_CONTEXT;
@@ -106,6 +114,7 @@ Renderer::~Renderer() {
         eglTerminate(display_);
         display_ = EGL_NO_DISPLAY;
     }
+    delete pcf;
 }
 
 void Renderer::render() {
@@ -114,6 +123,9 @@ void Renderer::render() {
     // changed.
     updateRenderArea();
 
+    // This flag tells, the PointCloudRenderer that mvp has changed.
+    // Based on this value PointCloudRenderer selects the chunks appropriately.
+    bool mvpChanged = false;
     // When the renderable area changes, the projection matrix has to also be updated. This is true
     // even if you change from the sample orthographic projection matrix as your aspect ratio has
     // likely changed.
@@ -122,11 +134,11 @@ void Renderer::render() {
         float aspectRatio = float(width_) / float(height_);
         float halfHeight = kProjectionHalfHeight;
         float halfWidth = halfHeight * aspectRatio;
-        
+
         glm::mat4 projectionMatrix = glm::ortho(
-            -halfWidth, halfWidth,
-            -halfHeight, halfHeight,
-            kProjectionNearPlane, kProjectionFarPlane
+                -halfWidth, halfWidth,
+                -halfHeight, halfHeight,
+                kProjectionNearPlane, kProjectionFarPlane
         );
 
         // Set the projection matrix uniform
@@ -135,21 +147,42 @@ void Renderer::render() {
         glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, &projectionMatrix[0][0]);
 
         // make sure the matrix isn't generated every frame
+        proj = glm::perspective(glm::radians(45.0f), width_ * 1.0f / height_, 0.1f, 500.0f);
+        mvp = proj * view * model;
+        mvpChanged = true;
         shaderNeedsNewProjectionMatrix_ = false;
     }
-
-    // clear the color buffer
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Draw the triangle
-    glUseProgram(shader_program_);
-    glBindVertexArray(vao_);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glBindVertexArray(0);
+    if (updateView) {
+        glm::vec3 cameraTarget = camPos + glm::vec3(
+                cos(pitch) * sin(yaw),
+                sin(pitch),
+                cos(pitch) * cos(yaw)
+        );
+        view = glm::lookAt(camPos, cameraTarget, camUp);
+        mvp = proj * view * model;
+        mvpChanged = true;
+        updateView = false;
+    }
+
+    pcf->render(mvp, mvpChanged);
 
     // Present the rendered image. This is an implicit glFlush.
     auto swapResult = eglSwapBuffers(display_, surface_);
     assert(swapResult == EGL_TRUE);
+
+    // --- FPS calculation ---
+    frameCount++;
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float> elapsed = currentTime - lastTime;
+
+    if (elapsed.count() >= 1.0f) { // every 1 second
+        float fps = frameCount / elapsed.count();
+        aout << "FPS: " << fps << std::endl;
+        frameCount = 0;
+        lastTime = currentTime;
+    }
 }
 
 void Renderer::initRenderer() {
@@ -231,12 +264,12 @@ void Renderer::initRenderer() {
     // enable alpha globally for now, you probably don't want to do this in a game
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
+
     // Create and compile vertex shader
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertex, nullptr);
+    glShaderSource(vertexShader, 1, &gizmoVertex, nullptr);
     glCompileShader(vertexShader);
-    
+
     // Check vertex shader compilation
     GLint success;
     glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
@@ -245,12 +278,12 @@ void Renderer::initRenderer() {
         glGetShaderInfoLog(vertexShader, 512, nullptr, infoLog);
         aout << "Vertex shader compilation failed:\n" << infoLog << std::endl;
     }
-    
+
     // Create and compile fragment shader
     GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragment, nullptr);
+    glShaderSource(fragmentShader, 1, &gizmoFragment, nullptr);
     glCompileShader(fragmentShader);
-    
+
     // Check fragment shader compilation
     glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
     if (!success) {
@@ -258,13 +291,13 @@ void Renderer::initRenderer() {
         glGetShaderInfoLog(fragmentShader, 512, nullptr, infoLog);
         aout << "Fragment shader compilation failed:\n" << infoLog << std::endl;
     }
-    
+
     // Create shader program and link
     shader_program_ = glCreateProgram();
     glAttachShader(shader_program_, vertexShader);
     glAttachShader(shader_program_, fragmentShader);
     glLinkProgram(shader_program_);
-    
+
     // Check program linking
     glGetProgramiv(shader_program_, GL_LINK_STATUS, &success);
     if (!success) {
@@ -272,39 +305,73 @@ void Renderer::initRenderer() {
         glGetProgramInfoLog(shader_program_, 512, nullptr, infoLog);
         aout << "Shader program linking failed:\n" << infoLog << std::endl;
     }
-    
+
     // Delete shaders as they're linked into program now
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
-    
+
     // Define triangle vertices with positions (x, y, z) and colors (r, g, b)
     float vertices[] = {
-        // Position          // Color (RGB)
-         0.0f,  1.0f, 0.0f,  1.0f, 0.0f, 0.0f,  // Top vertex - Red
-        -1.0f, -1.0f, 0.0f,  0.0f, 1.0f, 0.0f,  // Bottom left - Green
-         1.0f, -1.0f, 0.0f,  0.0f, 0.0f, 1.0f   // Bottom right - Blue
+            // Position          // Color (RGB)
+            0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f,  // Top vertex - Red
+            -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 0.0f,  // Bottom left - Green
+            1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f   // Bottom right - Blue
     };
-    
+
     // Create and bind VAO and VBO
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
-    
+
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-    
+
     // Position attribute (location 0, first 3 floats)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void *) 0);
     glEnableVertexAttribArray(0);
-    
+
     // Color attribute (location 1, next 3 floats)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                          (void *) (3 * sizeof(float)));
     glEnableVertexAttribArray(1);
-    
+
     // Unbind VAO
     glBindVertexArray(0);
-    
+
     aout << "Triangle initialized successfully" << std::endl;
+
+    AAssetManager *am = app_->activity->assetManager;
+    std::string filename = "1m.pcd";
+    pcf = new PointCloudFile(am, filename);
+    BoundingBox world = pcf->getBounds();
+    gizmo = new Gizmo(world);
+
+    float cx, cy, cz;
+    pcf->getBounds().getCenter(cx, cy, cz);
+
+    model = glm::mat4(1.0f);
+    camUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    camPos = glm::vec3(cx + 10, cy + 10, cz + 10);
+    camTarget = glm::vec3(cx, cy, cz);
+
+
+    direction = glm::vec3(camTarget.x - camPos.x,
+                          camTarget.y - camPos.y,
+                          camTarget.z - camPos.z);
+    direction = glm::normalize(direction);
+
+
+//    view = glm::lookAt(camPos, camTarget, camUp);
+
+    yaw = atan2(direction.x, direction.z);
+    pitch = asin(direction.y);
+
+    glm::vec3 cameraTarget = camPos + glm::vec3(
+            cos(pitch) * sin(yaw),
+            sin(pitch),
+            cos(pitch) * cos(yaw)
+    );
+    view = glm::lookAt(camPos, cameraTarget, camUp);
 }
 
 void Renderer::updateRenderArea() {
@@ -313,7 +380,6 @@ void Renderer::updateRenderArea() {
 
     EGLint height;
     eglQuerySurface(display_, surface_, EGL_HEIGHT, &height);
-
     if (width != width_ || height != height_) {
         width_ = width;
         height_ = height;
@@ -353,6 +419,8 @@ void Renderer::handleInput() {
             case AMOTION_EVENT_ACTION_POINTER_DOWN:
                 aout << "(" << pointer.id << ", " << x << ", " << y << ") "
                      << "Pointer Down";
+                lastX = x;
+                lastY = y;
                 break;
 
             case AMOTION_EVENT_ACTION_CANCEL:
@@ -374,9 +442,39 @@ void Renderer::handleInput() {
                     x = GameActivityPointerAxes_getX(&pointer);
                     y = GameActivityPointerAxes_getY(&pointer);
                     aout << "(" << pointer.id << ", " << x << ", " << y << ")";
-
                     if (index != (motionEvent.pointerCount - 1)) aout << ",";
                     aout << " ";
+
+                    if (pointer.id == 0) {
+                        if (firstTouch) {
+                            lastX = x;
+                            lastY = y;
+                            firstTouch = false;
+                        } else {
+                            float xoffset = x - lastX;
+                            float yoffset =
+                                    lastY -
+                                    y; // reversed since y-coordinates go from bottom to top
+
+
+                            float sensitivity = 0.001f; // change this value to your liking
+                            xoffset *= sensitivity;
+                            yoffset *= sensitivity;
+                            if (lastX != x || lastY != y) {
+                                yaw += xoffset;
+                                pitch -= yoffset;
+                                lastX = x;
+                                lastY = y;
+                                updateView = true;
+
+                                // make sure that when pitch is out of bounds, screen doesn't get flipped
+                                if (pitch > 89.0f)
+                                    pitch = 89.0f;
+                                if (pitch < -89.0f)
+                                    pitch = -89.0f;
+                            }
+                        }
+                    }
                 }
                 aout << "Pointer Move";
                 break;
@@ -391,7 +489,7 @@ void Renderer::handleInput() {
     // handle input key events.
     for (auto i = 0; i < inputBuffer->keyEventsCount; i++) {
         auto &keyEvent = inputBuffer->keyEvents[i];
-        aout << "Key: " << keyEvent.keyCode <<" ";
+        aout << "Key: " << keyEvent.keyCode << " ";
         switch (keyEvent.action) {
             case AKEY_EVENT_ACTION_DOWN:
                 aout << "Key Down";
@@ -410,4 +508,5 @@ void Renderer::handleInput() {
     }
     // clear the key input count too.
     android_app_clear_key_events(inputBuffer);
+
 }

@@ -2,6 +2,7 @@
 
 #include "AndroidOut.h"
 #include "Renderer.h"
+#include "PointCloudFile.h"
 
 #include <game-activity/GameActivity.cpp>
 #include <game-text-input/gametextinput.cpp>
@@ -62,7 +63,6 @@ bool motion_event_filter_func(const GameActivityMotionEvent *motionEvent) {
 void android_main(struct android_app *pApp) {
     // Can be removed, useful to ensure your code is running
     aout << "Welcome to android_main" << std::endl;
-
     // Register an event handler for Android events
     pApp->onAppCmd = handle_cmd;
 
@@ -81,7 +81,7 @@ void android_main(struct android_app *pApp) {
             int events;
             android_poll_source *pSource;
             int result = ALooper_pollOnce(timeout, nullptr, &events,
-                                          reinterpret_cast<void**>(&pSource));
+                                          reinterpret_cast<void **>(&pSource));
             switch (result) {
                 case ALOOPER_POLL_TIMEOUT:
                     [[clang::fallthrough]];
