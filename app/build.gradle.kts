@@ -47,6 +47,9 @@ android {
             version = "3.22.1"
         }
     }
+    androidResources {
+        noCompress.addAll(listOf("pcd"))
+    }
 }
 
 dependencies {
