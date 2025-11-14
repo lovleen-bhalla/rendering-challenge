@@ -8,6 +8,17 @@
 #include "AndroidOut.h"
 #include "ShaderSource.h"
 
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
+
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cstring>
+#include <cstdlib>
+#include <iostream>
 
 struct Plane {
     float a, b, c, d;
@@ -119,50 +130,84 @@ void FindVisibleNodes(OctreeNode *node,
 }
 
 PointCloudFile::PointCloudFile(AAssetManager *am, const std::string filename) {
-    AAsset *pcdFile = AAssetManager_open( // TODO Close this in destructor
+    AAsset *pcdFile = AAssetManager_open(
             am,
             filename.c_str(),
-            AASSET_MODE_BUFFER);
+            AASSET_MODE_BUFFER
+    );
+
     if (!pcdFile) {
         aout << "Failed to open asset file" << std::endl;
         return;
     }
-    // Get a pointer to the internal buffer (read-only)
-    size_t size = AAsset_getLength(pcdFile);
-    this->data = (void *) AAsset_getBuffer(pcdFile);
-    if (!this->data) {
-        aout << filename << " is compressed, cannot mmap directly" << std::endl;
-        AAsset_close(pcdFile);
-        return;
-    }
-    // Read header
-    header = new FileHeader;
-    memcpy(header, this->data, sizeof(FileHeader));
-    if (std::string(header->magic, 7) != "PCLOUD1") {
-        aout << "error " << "Invalid filename format! Magic: " << std::string(header->magic, 7)
-             << std::endl;
-        AAsset_close(pcdFile);
-        return;
-    }
-    aout << "File h: " << header->string() << std::endl;
-    uint32_t numChunks = header->chunk_count;
 
-    const ChunkMetadata *fileChunks = reinterpret_cast<const ChunkMetadata *>(
-            reinterpret_cast<const char *>(this->data) + sizeof(FileHeader)
-    );
-    chunks = (ChunkMetadata *) malloc(sizeof(ChunkMetadata) * numChunks);
-    if (!chunks) {
-        aout << "Failed to allocate memory" << std::endl;
+    off_t length = 0;
+
+    fd = AAsset_openFileDescriptor(pcdFile, &start, &length);
+    if (fd < 0) {
+        aout << filename << " cannot get fd" << std::endl;
         AAsset_close(pcdFile);
         return;
     }
-    // Copy the data into your memory
-    memcpy(chunks, fileChunks, sizeof(ChunkMetadata) * numChunks);
+    lseek(fd, start, SEEK_SET);
+
+    size_t fileSize = static_cast<size_t>(length);
+    header = (FileHeader *) malloc(sizeof(FileHeader));
+    ssize_t bytes_read = read(fd, header, sizeof(FileHeader));
+
+    if (bytes_read == -1) {
+        perror("read");
+        return;
+    } else if (bytes_read != sizeof(FileHeader)) {
+        return;
+    }
+    if (std::string(header->magic, 7) != "PCLOUD1") {
+        aout << "Invalid magic header: " << std::string(header->magic, 7) << "  " << header->magic
+             << std::endl;
+        return;
+    }
+    aout << "File header: " << header->string() << std::endl;
+
+    uint32_t numChunks = header->chunk_count;
+    auto chunksMetadataSize = numChunks * sizeof(ChunkMetadata);
+    // mmap the asset contents
+
+
+    long pageSize = sysconf(_SC_PAGESIZE);
+    off_t aligned_start = (start / pageSize) * pageSize;
+    auto offset = start - aligned_start;
+    auto adjusted_length = offset + sizeof(FileHeader) + chunksMetadataSize;
+
+    void *mappedPtr = mmap(
+            nullptr,
+            adjusted_length,
+            PROT_READ,
+            MAP_PRIVATE,
+            fd,
+            aligned_start
+    );
+
+    if (mappedPtr == MAP_FAILED) {
+        aout << "mmap failing " << start << "  " << pageSize << " " << start % pageSize << start <<
+             errno
+             << std::endl;
+        aout << "mmap failed!! " << errno << std::endl;
+        perror("mmap");
+        AAsset_close(pcdFile);
+        close(fd);
+        return;
+    }
+
+    chunks = (ChunkMetadata *) malloc(sizeof(ChunkMetadata) * numChunks);
+    memcpy(chunks, (char *) mappedPtr + offset + sizeof(FileHeader), chunksMetadataSize);
+    munmap(mappedPtr, adjusted_length);
+    AAsset_close(pcdFile);
+
+    // Build octree
     o = new OctreeNode(header->bounds);
-    aout << "total chunks: " << numChunks << std::endl;
-    for (int i = 0; i < numChunks; i++) {
-        ChunkMetadata chunk = chunks[i];
-        o->insert(chunk.bbox, i);
+    for (uint32_t i = 0; i < numChunks; i++) {
+        aout << "inserting chunk: " << i << "  " << chunks[i].bbox.string() << std::endl;
+        o->insert(chunks[i].bbox, i);
     }
 
     auto compileShader = [](GLenum type, const char *src) -> GLuint {
@@ -178,7 +223,6 @@ PointCloudFile::PointCloudFile(AAssetManager *am, const std::string filename) {
         }
         return s;
     };
-
     GLuint vs = compileShader(GL_VERTEX_SHADER, pointCloudVertex);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, pointCloudFragment);
     shaderProgram = glCreateProgram();
@@ -225,10 +269,6 @@ uint64_t PointCloudFile::pointCount() {
     return header->total_points;
 }
 
-void *PointCloudFile::getData() {
-    return data;
-}
-
 uint32_t PointCloudFile::chunkCount() {
     return header->chunk_count;
 };
@@ -252,16 +292,41 @@ void PointCloudFile::render(glm::mat4 mvp, bool viewUpdated) {
         glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof(Point) * totalPoints, nullptr,
-                     GL_STATIC_DRAW);
+                     GL_STREAM_DRAW);
 
+        long pageSize = sysconf(_SC_PAGESIZE);
         int currOffset = 0;
         for (int id: ids) {
             ChunkMetadata chunk = chunks[id];
-            size_t dataSize = chunk.point_count * sizeof(Point);
-            const char *points =
-                    reinterpret_cast<const char *>(this->data) + chunk.file_offset;
-            glBufferSubData(GL_ARRAY_BUFFER, currOffset, dataSize,
-                            points);
+            auto chunkOffset = chunk.file_offset;
+
+            auto chunkStart = chunkOffset + start;
+            auto aligned_start = (chunkStart / pageSize) * pageSize;
+            auto offset = chunkStart - aligned_start;
+            auto dataSize = chunk.point_count * sizeof(Point);
+            auto adjusted_length = offset + dataSize;
+
+            void *mappedPtr = mmap(
+                    nullptr,
+                    adjusted_length,
+                    PROT_READ,
+                    MAP_PRIVATE,
+                    fd,
+                    aligned_start
+            );
+
+            if (mappedPtr == MAP_FAILED) {
+                aout << "mmap failing chunk" << id << "  " << "" << pageSize << " " << errno << "  "<< start % pageSize
+                     << start <<
+                     errno
+                     << std::endl;
+                aout << "mmap failed!! " << errno << std::endl;
+                perror("mmap");
+                continue;
+            }
+
+            glBufferSubData(GL_ARRAY_BUFFER, currOffset, dataSize, (char *) mappedPtr + offset );
+            munmap(mappedPtr, dataSize);
             currOffset = currOffset + dataSize;
         }
     }

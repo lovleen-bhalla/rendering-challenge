@@ -18,8 +18,6 @@ public:
 
     void GetChunk(int id, uint64_t &start, uint64_t &end);
 
-    void *getData();
-
     BoundingBox getBounds();
 
     uint64_t pointCount();
@@ -31,7 +29,7 @@ public:
     virtual ~PointCloudFile();
 
 private:
-    void *data;
+    int fd = -1;
     FileHeader *header;
     ChunkMetadata *chunks;
     OctreeNode *o;
@@ -41,6 +39,8 @@ private:
     GLuint vao;
     GLuint vbo;
     int pointsToRender;
+
+    off_t start;
 };
 
 #endif //RENDERINGCHALLENGE_POINTCLOUDFILE_H
